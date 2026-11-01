@@ -64,7 +64,16 @@ jobs:
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_INSTALL_PREFIX=$pwd/build/output" "-DQTROOT=$env:QT_ROOT_DIR" "-DMPV_INCLUDE_DIR=$pwd/build/mpv/include" "-DMPV_LIBRARY=$pwd/build/mpv/libmpv-2.dll"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build installer
-        run: cmake --build build --target windows_package --parallel 4
+        shell: pwsh
+        run: |
+          cmake --build build --target windows_package --parallel 4 2>&1 | Tee-Object -FilePath build/build.log
+          $result = $LASTEXITCODE
+          if ($result) {
+            $tail = (Get-Content build/build.log -Tail 90) -join "`n"
+            $escaped = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Windows build failure::$escaped"
+            exit $result
+          }
       - name: Prepare release assets
         shell: pwsh
         run: |
@@ -118,3 +127,4 @@ jobs:
           Verify the installer against SHA256SUMS.txt before installation.
           EOF
           gh release create "$RELEASE_TAG" dist/* --verify-tag --draft --title "Jellyfin Media Player $RELEASE_TAG — Reload fix" --notes-file notes.md
+
