@@ -5,6 +5,10 @@
 #include <QGuiApplication>
 #include <QDesktopServices>
 #include <QDir>
+#include <QFile>
+#include <QTextStream>
+#include <QStringList>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkRequest>
 #include <QNetworkAccessManager>
@@ -324,9 +328,42 @@ QString SystemComponent::getNativeShellScript()
   auto path = SettingsComponent::Get().getExtensionPath();
   qDebug() << QString("Using path for extension: %1").arg(path);
 
-  QFile file {path + "nativeshell.js"};
-  file.open(QIODevice::ReadOnly);
-  auto nativeshellString = QTextStream(&file).readAll();
+  // Backport the bundled bridge from upstream 9621af1 without changing Qt
+  // or the installation layout. Script elements using file:/qrc: URLs can
+  // be rejected by the web client's CSP after a reload.
+  const QStringList scriptPaths = {
+    ":/qtwebchannel/qwebchannel.js",
+    path + "mpvVideoPlayer.js",
+    path + "mpvAudioPlayer.js",
+    path + "jmpInputPlugin.js",
+    path + "jmpUpdatePlugin.js",
+    path + "nativeshell.js"
+  };
+
+  QString nativeshellString;
+  for (const QString& scriptPath : scriptPaths)
+  {
+    QFile file {scriptPath};
+    if (!file.open(QIODevice::ReadOnly))
+    {
+      qCritical() << "Failed to load native bridge script:" << scriptPath << file.errorString();
+      return QString();
+    }
+
+    const QString source = QTextStream(&file).readAll();
+    if (scriptPath == path + "nativeshell.js")
+    {
+      nativeshellString += source + "\n";
+    }
+    else
+    {
+      // Keep module-private declarations isolated; plugins export on window.
+      nativeshellString += "(function () {\n" + source + "\n";
+      if (scriptPath == ":/qtwebchannel/qwebchannel.js")
+        nativeshellString += "window.QWebChannel = QWebChannel;\n";
+      nativeshellString += "})();\n";
+    }
+  }
   QJsonObject clientData;
   clientData.insert("deviceName", QJsonValue::fromVariant(SettingsComponent::Get().getClientName()));
   clientData.insert("scriptPath", QJsonValue::fromVariant("file:///" + path));

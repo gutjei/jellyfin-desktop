@@ -26,22 +26,10 @@ const plugins = [
     'jmpUpdatePlugin'
 ];
 
-function loadScript(src) {
-    return new Promise((resolve, reject) => {
-        const s = document.createElement('script');
-        s.src = src;
-        s.onload = resolve;
-        s.onerror = reject;
-        document.head.appendChild(s);
-    });
-}
-
-// Add plugin loaders
+// The native host injects the player modules together with this script.
+// Loading them through script elements can fail under CSP after Reload.
 for (const plugin of plugins) {
-    window[plugin] = async () => {
-        await loadScript(`${jmpInfo.scriptPath}${plugin}.js`);
-        return window["_" + plugin];
-    };
+    window[plugin] = async () => window["_" + plugin];
 }
 
 window.NativeShell = {
@@ -214,26 +202,10 @@ function getDeviceProfile() {
 }
 
 async function createApi() {
-    try {
-        // Can't append script until document exists
+    if (document.readyState === 'loading') {
         await new Promise(resolve => {
-            document.addEventListener('DOMContentLoaded', resolve);
+            document.addEventListener('DOMContentLoaded', resolve, { once: true });
         });
-
-        await loadScript('qrc:///qtwebchannel/qwebchannel.js');
-    } catch (e) {
-        // try clearing out any cached CSPs
-        let foundCache = false;
-        for (const cache of await caches.keys()) {
-            const dataDeleted = await caches.delete(cache);
-            if (dataDeleted) {
-                foundCache = true;
-            }
-        }
-        if (foundCache) {
-            window.location.reload();
-        }
-        throw e;
     }
 
     const channel = await new Promise((resolve) => {
