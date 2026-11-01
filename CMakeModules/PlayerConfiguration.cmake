@@ -13,3 +13,9 @@ endif(NOT OPENGL_FOUND)
 
 find_package(MPV REQUIRED)
 include_directories(${MPV_INCLUDE_DIR})
+
+# MSVC links against the import library; packaging still needs the DLL.
+set(MPV_LINK_LIBRARY "${MPV_LIBRARY}")
+if(WIN32 AND MPV_IMPLIB)
+  set(MPV_LINK_LIBRARY "${MPV_IMPLIB}")
+endif()

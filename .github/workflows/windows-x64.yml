@@ -61,7 +61,7 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_INSTALL_PREFIX=$pwd/build/output" "-DQTROOT=$env:QT_ROOT_DIR" "-DMPV_INCLUDE_DIR=$pwd/build/mpv/include" "-DMPV_LIBRARY=$pwd/build/mpv/libmpv-2.dll"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_INSTALL_PREFIX=$pwd/build/output" "-DQTROOT=$env:QT_ROOT_DIR" "-DMPV_INCLUDE_DIR=$pwd/build/mpv/include" "-DMPV_LIBRARY=$pwd/build/mpv/libmpv-2.dll" "-DMPV_IMPLIB=$pwd/build/mpv/libmpv-2.dll.lib"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build installer
         shell: pwsh
@@ -127,4 +127,3 @@ jobs:
           Verify the installer against SHA256SUMS.txt before installation.
           EOF
           gh release create "$RELEASE_TAG" dist/* --verify-tag --draft --title "Jellyfin Media Player $RELEASE_TAG — Reload fix" --notes-file notes.md
-

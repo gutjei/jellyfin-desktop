@@ -165,7 +165,7 @@ endif()
 
 target_link_libraries(${MAIN_TARGET}
   shared
-  ${MPV_LIBRARY}
+  ${MPV_LINK_LIBRARY}
   ${OPENGL_LIBS}
   ${QT5_LIBRARIES}
   ${OS_LIBS}
