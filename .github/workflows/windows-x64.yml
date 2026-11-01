@@ -1,0 +1,120 @@
+name: Windows x64 (1.12 fixes)
+
+on:
+  push:
+    branches: [codex/fix-reload-v1.12.0]
+    tags: ['v1.12.0-fix.*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test Reload regression
+        run: node --test tests/reload-bridge.cjs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install compatible CMake
+        run: python -m pip install cmake==3.31.6
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          arch: win64_msvc2019_64
+          modules: qtwebengine
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Prepare dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build,build/mpv,build/wix | Out-Null
+          curl.exe --fail --location --retry 3 https://aka.ms/vs/17/release/vc_redist.x64.exe --output build/vc_redist.x64.exe
+          if ($LASTEXITCODE) { throw 'VC runtime download failed' }
+          curl.exe --fail --location --retry 3 https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/wix311-binaries.zip --output build/wix.zip
+          if ($LASTEXITCODE) { throw 'WiX download failed' }
+          Expand-Archive build/wix.zip build/wix -Force
+          "$pwd/build/wix" | Out-File $env:GITHUB_PATH -Append -Encoding utf8
+          curl.exe --fail --location --retry 3 https://sourceforge.net/projects/mpv-player-windows/files/libmpv/mpv-dev-x86_64-v3-20240304-git-9ac791c.7z/download --output build/mpv.7z
+          if ($LASTEXITCODE) { throw 'mpv download failed' }
+          7z x build/mpv.7z -obuild/mpv -y
+          if ($LASTEXITCODE) { throw 'mpv extraction failed' }
+          $exports = & dumpbin /exports build/mpv/libmpv-2.dll
+          if ($LASTEXITCODE) { throw 'dumpbin failed' }
+          $names = @($exports | ForEach-Object { if ($_ -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(mpv_\w+)') { $Matches[1] } })
+          if ($names.Count -lt 20) { throw 'Could not read mpv exports' }
+          @('LIBRARY libmpv-2.dll', 'EXPORTS') + $names | Set-Content build/mpv/mpv.def -Encoding ascii
+          lib /def:build/mpv/mpv.def /out:build/mpv/libmpv-2.dll.lib /MACHINE:X64
+          if ($LASTEXITCODE) { throw 'Import library creation failed' }
+          $bundle = Get-Content bundle/win/Bundle.wxs -Raw
+          $bundle = $bundle.Replace('C:\Program Files (x86)\Microsoft Visual Studio\2019\BuildTools\VC\Redist\MSVC\v142\vcredist_x64.exe', "$pwd\build\vc_redist.x64.exe")
+          Set-Content bundle/win/Bundle.wxs $bundle -Encoding utf8
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_INSTALL_PREFIX=$pwd/build/output" "-DQTROOT=$env:QT_ROOT_DIR" "-DMPV_INCLUDE_DIR=$pwd/build/mpv/include" "-DMPV_LIBRARY=$pwd/build/mpv/libmpv-2.dll"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build installer
+        run: cmake --build build --target windows_package --parallel 4
+      - name: Prepare release assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $installers = @(Get-ChildItem build/JellyfinMediaPlayer-*-windows-x64.exe)
+          if ($installers.Count -ne 1) { throw 'Expected one x64 installer' }
+          $label = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME.TrimStart('v') } else { '1.12.0-fix-dev' }
+          $name = "JellyfinMediaPlayer-$label-windows-x64.exe"
+          Copy-Item -LiteralPath $installers[0].FullName -Destination "dist/$name"
+          $hash = (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $name" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          "Commit: $env:GITHUB_SHA" | Set-Content dist/BUILD.txt -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-installer
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/v1.12.0-fix.')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-installer
+          path: dist
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          cat > notes.md <<EOF
+          Community Windows x64 build based on Jellyfin Media Player 1.12.0.
+
+          Fixes playback after right-click → Reload by injecting Qt WebChannel and native player modules together, keeping mpv available under the web client's CSP.
+
+          - Retains Qt 5.15.2 and the existing 1.12.0 configuration layout.
+          - Windows x64 installer; requires an x86-64-v3 capable CPU, matching the upstream 1.12.0 x64 build.
+          - Reload regression tests and installer build passed in GitHub Actions.
+          - Installer is unsigned. Interactive testing of this newly compiled installer is pending.
+          - Source commit: $SOURCE_SHA
+          - Internal application version remains 1.12.0; the release tag identifies this patched build.
+
+          Verify the installer against SHA256SUMS.txt before installation.
+          EOF
+          gh release create "$RELEASE_TAG" dist/* --verify-tag --draft --title "Jellyfin Media Player $RELEASE_TAG — Reload fix" --notes-file notes.md
